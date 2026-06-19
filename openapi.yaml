@@ -1,0 +1,4808 @@
+openapi: 3.1.0
+info:
+  title: PalmaHost Cloud API
+  version: 1.0.0
+  description: >
+    Public API for PalmaHost Cloud. The panel is just another client of this
+    API — anything the panel does can be done here. JSON always; cursor
+    pagination; stable error codes; idempotency on money/resource writes.
+
+
+    This document is the source of truth: docs, mocks and SDKs derive from it,
+    and it tracks `docs/api-surface.md` exactly (field names, paths, methods,
+    auth).
+
+
+    ## Conventions
+
+    - **Success (object)**: `{ "data": <object> }`.
+
+    - **Success (list)**: `{ "data": [...], "meta": { "cursor": "<last-id>",
+      "has_more": bool, "total": int } }` (`cursor`/`total` omitted when zero;
+      a nil slice serializes as `[]`).
+
+    - **Error**: `{ "error": { "code": "VALIDATION_ERROR", "message": "...",
+      "docs": "https://docs.palmahost.sh/errors/<CODE>" } }`.
+
+    - **Money**: integer minor units (cents) + ISO-4217 currency; never floats.
+      Most structs use raw `*_cents` int64 fields.
+
+    - **IDs**: `<prefix>_<uuidv7hex>` (time-ordered, used as pagination cursors).
+
+    - **Idempotency**: write endpoints accept `Idempotency-Key: <key>`; replays
+      return the stored response with `Idempotency-Replayed: true`.
+  contact:
+    name: PalmaHost
+    url: https://docs.palmahost.sh
+
+servers:
+  - url: https://my.palmahost.sh/v1
+    description: Production
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: catalog
+    description: Public product/plan/location catalog.
+  - name: auth
+    description: Registration, login, sessions, MFA and passkeys.
+  - name: tokens
+    description: API token management (session-only; tokens can never manage tokens).
+  - name: account
+    description: Account profile, preferences, team, IP allowlist and groups.
+  - name: billing
+    description: Balance, ledger, top-ups, invoices, auto-topup and gift cards.
+  - name: promotions
+    description: Promotion code validation.
+  - name: payments
+    description: Provider payment webhooks (public, signature-verified).
+  - name: services
+    description: Compute instances and their lifecycle.
+  - name: network
+    description: IPs, firewall rules and private networks.
+  - name: snapshots
+    description: Instance snapshots.
+  - name: backups
+    description: Scheduled backups.
+  - name: monitoring
+    description: Metrics and cloud alerts.
+  - name: ddos
+    description: DDoS protection profiles and events.
+  - name: ssh-keys
+    description: SSH public keys and per-service attachment.
+  - name: apps
+    description: App marketplace catalog and per-service 1-click installs.
+  - name: cron-jobs
+    description: Scheduled URL pinger jobs, plans and run history.
+  - name: webhooks
+    description: Outbound webhook endpoints and deliveries.
+  - name: affiliate
+    description: Affiliate program, tracking and payouts.
+  - name: support
+    description: Tickets, knowledge base and shared credentials.
+  - name: operational
+    description: Health, readiness, version, metrics and ping.
+  - name: admin-auth
+    description: Staff authentication and impersonation.
+  - name: admin-staff
+    description: Staff member management.
+  - name: admin-core
+    description: Catalog, account, billing and service administration.
+  - name: admin-support
+    description: Staff support queue.
+  - name: admin-fleet
+    description: Cluster, node and guest fleet management.
+
+paths:
+  # ── Operational (not under /v1, documented for completeness) ──────────
+  /healthz:
+    servers:
+      - url: https://my.palmahost.sh
+    get:
+      tags: [operational]
+      summary: Liveness probe
+      operationId: getHealthz
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /readyz:
+    servers:
+      - url: https://my.palmahost.sh
+    get:
+      tags: [operational]
+      summary: Readiness probe
+      operationId: getReadyz
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+        "503": { $ref: "#/components/responses/ErrorResponse" }
+  /version:
+    servers:
+      - url: https://my.palmahost.sh
+    get:
+      tags: [operational]
+      summary: Build version
+      operationId: getVersion
+      security: []
+      responses:
+        "200":
+          description: Version info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  commit: { type: string }
+                  built_at: { type: string, format: date-time }
+  /metrics:
+    servers:
+      - url: https://my.palmahost.sh
+    get:
+      tags: [operational]
+      summary: Prometheus metrics
+      operationId: getMetrics
+      security: []
+      responses:
+        "200":
+          description: Prometheus exposition format
+          content:
+            text/plain:
+              schema: { type: string }
+  /ping:
+    get:
+      tags: [operational]
+      summary: Authenticated ping
+      operationId: ping
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+
+  # ── Catalog (public) ──────────────────────────────────────────────────
+  /products:
+    get:
+      tags: [catalog]
+      summary: List products
+      operationId: listProducts
+      security: []
+      responses:
+        "200":
+          description: Products
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Product" }
+  /plans:
+    get:
+      tags: [catalog]
+      summary: List plans
+      operationId: listPlans
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+      responses:
+        "200":
+          description: Plans
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Plan" }
+  /locations:
+    get:
+      tags: [catalog]
+      summary: List locations
+      operationId: listLocations
+      security: []
+      responses:
+        "200":
+          description: Locations
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Location" }
+  /locations/{id}/latency:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [catalog]
+      summary: Latency probe hint for a location
+      operationId: getLocationLatency
+      security: []
+      responses:
+        "200":
+          description: Latency probe info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataEnvelope"
+                # data: { location_id, code, probe_url }
+
+  # ── Auth ────────────────────────────────────────────────────────────
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Register a new account
+      operationId: registerUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, name]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                name: { type: string }
+                company_name: { type: string }
+                language: { type: string }
+      responses:
+        "201":
+          description: Created user
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "409": { $ref: "#/components/responses/ErrorResponse" }
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Password + optional TOTP login
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                totp_code: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/SessionResponse" }
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Log out the current session
+      operationId: logout
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Rotate the refresh token (reuse detection)
+      operationId: refreshToken
+      security:
+        - cookieAuth: []
+        - {}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/SessionResponse" }
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+  /auth/verify-email:
+    post:
+      tags: [auth]
+      summary: Verify an email address
+      operationId: verifyEmail
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200":
+          description: Verified
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: verified }
+  /auth/password/reset-request:
+    post:
+      tags: [auth]
+      summary: Request a password reset email
+      operationId: requestPasswordReset
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /auth/password/reset:
+    post:
+      tags: [auth]
+      summary: Complete a password reset
+      operationId: resetPassword
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties:
+                token: { type: string }
+                new_password: { type: string, format: password }
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /auth/passkey/login/begin:
+    post:
+      tags: [auth]
+      summary: Begin a passkey login ceremony
+      operationId: beginPasskeyLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "200":
+          description: WebAuthn assertion options
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id: { type: string }
+                  options: { type: object, additionalProperties: true }
+  /auth/passkey/login/finish:
+    post:
+      tags: [auth]
+      summary: Finish a passkey login ceremony
+      operationId: finishPasskeyLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, assertion]
+              properties:
+                session_id: { type: string }
+                assertion: { type: object, additionalProperties: true }
+      responses:
+        "200": { $ref: "#/components/responses/SessionResponse" }
+  /auth/password/change:
+    post:
+      tags: [auth]
+      summary: Change the authenticated user's password
+      operationId: changePassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string, format: password }
+                new_password: { type: string, format: password }
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /auth/sessions:
+    get:
+      tags: [auth]
+      summary: List active sessions
+      operationId: listSessions
+      responses:
+        "200":
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Session" }
+  /auth/sessions/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    delete:
+      tags: [auth]
+      summary: Revoke a session
+      operationId: revokeSession
+      responses:
+        "204": { description: Revoked }
+  /auth/totp/enroll:
+    post:
+      tags: [auth]
+      summary: Begin TOTP enrollment
+      operationId: enrollTotp
+      responses:
+        "200":
+          description: TOTP secret and provisioning URI
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret: { type: string }
+                  provisioning_uri: { type: string }
+  /auth/totp/confirm:
+    post:
+      tags: [auth]
+      summary: Confirm TOTP enrollment
+      operationId: confirmTotp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        "200":
+          description: Confirmed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: confirmed }
+  /auth/passkey/register/begin:
+    post:
+      tags: [auth]
+      summary: Begin a passkey registration ceremony
+      operationId: beginPasskeyRegistration
+      responses:
+        "200":
+          description: WebAuthn creation options
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id: { type: string }
+                  options: { type: object, additionalProperties: true }
+  /auth/passkey/register/finish:
+    post:
+      tags: [auth]
+      summary: Finish a passkey registration ceremony
+      operationId: finishPasskeyRegistration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, credential]
+              properties:
+                session_id: { type: string }
+                name: { type: string }
+                credential: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: registered }
+
+  # ── API tokens (session-only) ────────────────────────────────────────
+  /tokens:
+    get:
+      tags: [tokens]
+      summary: List API tokens
+      operationId: listTokens
+      responses:
+        "200":
+          description: Tokens
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/APIToken" }
+    post:
+      tags: [tokens]
+      summary: Create an API token (secret shown once)
+      operationId: createToken
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, scopes]
+              properties:
+                name: { type: string }
+                scopes:
+                  type: array
+                  items: { type: string, example: "services:read" }
+                ip_allowlist:
+                  type: array
+                  items: { type: string }
+                rate_limit_rpm: { type: integer }
+      responses:
+        "201":
+          description: Created token (with one-time secret)
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          token: { $ref: "#/components/schemas/APIToken" }
+                          secret: { type: string }
+  /tokens/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    delete:
+      tags: [tokens]
+      summary: Revoke a token
+      operationId: revokeToken
+      responses:
+        "204": { description: Revoked }
+
+  # ── Account ───────────────────────────────────────────────────────────
+  /account:
+    get:
+      tags: [account]
+      summary: Get account profile
+      operationId: getAccount
+      responses:
+        "200":
+          description: Account profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AccountProfile" }
+    patch:
+      tags: [account]
+      summary: Update account profile
+      operationId: updateAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                company_name: { type: string }
+                tax_id: { type: string }
+                billing_address: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AccountProfile" }
+  /account/preferences:
+    put:
+      tags: [account]
+      summary: Update account preferences
+      operationId: updatePreferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [language, currency, notification_channels]
+              properties:
+                language: { type: string }
+                currency: { type: string }
+                notification_channels:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /account/support-pin:
+    put:
+      tags: [account]
+      summary: Set the account support PIN
+      operationId: setSupportPin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pin]
+              properties:
+                pin: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /account/team/:
+    get:
+      tags: [account]
+      summary: List team members
+      operationId: listTeamMembers
+      responses:
+        "200":
+          description: Team members
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/TeamMember" }
+    post:
+      tags: [account]
+      summary: Invite a team member
+      operationId: createTeamMember
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, permissions]
+              properties:
+                email: { type: string, format: email }
+                permissions:
+                  type: array
+                  items: { type: string }
+      responses:
+        "201":
+          description: Created team member
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/TeamMember" }
+  /account/team/{userID}:
+    parameters:
+      - name: userID
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [account]
+      summary: Remove a team member
+      operationId: deleteTeamMember
+      responses:
+        "204": { description: Removed }
+  /account/ip-allowlist/:
+    get:
+      tags: [account]
+      summary: Get the account IP allowlist
+      operationId: getIpAllowlist
+      responses:
+        "200": { $ref: "#/components/responses/CidrList" }
+    put:
+      tags: [account]
+      summary: Replace the account IP allowlist
+      operationId: setIpAllowlist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cidrs]
+              properties:
+                cidrs:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/CidrList" }
+  /account/groups/:
+    get:
+      tags: [account]
+      summary: List service groups (projects)
+      operationId: listServiceGroups
+      responses:
+        "200":
+          description: Service groups
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/ServiceGroup" }
+    post:
+      tags: [account]
+      summary: Create a service group
+      operationId: createServiceGroup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "201":
+          description: Created group
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceGroup" }
+  /account/groups/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    delete:
+      tags: [account]
+      summary: Delete a service group
+      operationId: deleteServiceGroup
+      responses:
+        "204": { description: Deleted }
+
+  # ── Billing ─────────────────────────────────────────────────────────
+  /billing/balance:
+    get:
+      tags: [billing]
+      summary: Current balance
+      operationId: getBalance
+      responses:
+        "200":
+          description: Balance
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Money" }
+  /billing/transactions:
+    get:
+      tags: [billing]
+      summary: List ledger transactions
+      operationId: listTransactions
+      parameters:
+        - $ref: "#/components/parameters/TypeQuery"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Transactions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Transaction" }
+  /billing/topup:
+    post:
+      tags: [billing]
+      summary: Top up balance via a payment provider
+      operationId: createTopup
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount_cents, provider, currency, withdrawal_waived]
+              properties:
+                amount_cents: { type: integer, format: int64 }
+                provider: { type: string, enum: [redsys, paypal, cryptomus] }
+                currency: { type: string, example: EUR }
+                withdrawal_waived: { type: boolean }
+      responses:
+        "200":
+          description: Payment intent with redirect URL
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          payment_id: { type: string }
+                          redirect_url: { type: string }
+        "409": { $ref: "#/components/responses/ErrorResponse" }
+  /billing/invoices:
+    get:
+      tags: [billing]
+      summary: List invoices
+      operationId: listInvoices
+      responses:
+        "200":
+          description: Invoices
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Invoice" }
+  /billing/invoices/{id}/pdf:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [billing]
+      summary: Download an invoice PDF
+      operationId: getInvoicePdf
+      responses:
+        "200":
+          description: PDF document
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /billing/auto-topup:
+    get:
+      tags: [billing]
+      summary: Get auto top-up configuration
+      operationId: getAutoTopup
+      responses:
+        "200":
+          description: Auto top-up config
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AutoTopup" }
+    put:
+      tags: [billing]
+      summary: Configure auto top-up
+      operationId: updateAutoTopup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AutoTopup" }
+      responses:
+        "200":
+          description: Updated auto top-up config
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AutoTopup" }
+  /billing/gift-cards/redeem:
+    post:
+      tags: [billing]
+      summary: Redeem a gift card
+      operationId: redeemGiftCard
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        "200":
+          description: Redeemed gift card
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/GiftCard" }
+
+  # ── Promotions ────────────────────────────────────────────────────────
+  /promotions/validate:
+    post:
+      tags: [promotions]
+      summary: Validate a promotion code
+      operationId: validatePromotion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        "200":
+          description: Promotion
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Promotion" }
+
+  # ── Payments webhook (public, signature-verified) ─────────────────────
+  /webhooks/payments/{provider}:
+    parameters:
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string, enum: [redsys, paypal, cryptomus] }
+    post:
+      tags: [payments]
+      summary: Receive a payment provider webhook
+      operationId: paymentsWebhook
+      description: >
+        Raw provider body and headers; signature-verified. Body is opaque and
+        provider-specific.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: OK
+          content:
+            text/plain:
+              schema: { type: string, example: "OK" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+
+  # ── Services ────────────────────────────────────────────────────────
+  /services:
+    get:
+      tags: [services]
+      summary: List services
+      operationId: listServices
+      parameters:
+        - $ref: "#/components/parameters/StatusQuery"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/GroupId"
+      responses:
+        "200":
+          description: Services
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Instance" }
+    post:
+      tags: [services]
+      summary: Deploy a service (charges balance)
+      operationId: createService
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateServiceInput" }
+      responses:
+        "201":
+          description: Created service
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Instance" }
+        "409": { $ref: "#/components/responses/ErrorResponse" }
+  /services/{id}/:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [services]
+      summary: Get a service
+      operationId: getService
+      responses:
+        "200": { $ref: "#/components/responses/InstanceResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+    patch:
+      tags: [services]
+      summary: Update a service label
+      operationId: updateService
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/InstanceResponse" }
+    delete:
+      tags: [services]
+      summary: Terminate a service
+      operationId: terminateService
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202": { description: Termination scheduled }
+  /services/{id}/reboot:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [services]
+      summary: Reboot a service
+      operationId: rebootService
+      responses:
+        "202": { $ref: "#/components/responses/Accepted" }
+  /services/{id}/shutdown:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [services]
+      summary: Shut down a service
+      operationId: shutdownService
+      responses:
+        "202": { $ref: "#/components/responses/Accepted" }
+  /services/{id}/start:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [services]
+      summary: Start a service
+      operationId: startService
+      responses:
+        "202": { $ref: "#/components/responses/Accepted" }
+  /services/{id}/reinstall:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [services]
+      summary: Reinstall the OS
+      operationId: reinstallService
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [os_image]
+              properties:
+                os_image: { type: string }
+      responses:
+        "202":
+          description: Reinstalling
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: reinstalling }
+  /services/{id}/resize:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [services]
+      summary: Resize to a new plan
+      operationId: resizeService
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_plan_id]
+              properties:
+                new_plan_id: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/InstanceResponse" }
+  /services/{id}/clone:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [services]
+      summary: Clone a service
+      operationId: cloneService
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string }
+      responses:
+        "201":
+          description: Cloned service
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Instance" }
+  /services/{id}/renew:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [services]
+      summary: Renew a service
+      operationId: renewService
+      responses:
+        "200": { $ref: "#/components/responses/InstanceResponse" }
+  /services/{id}/status:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [services]
+      summary: Live server status
+      operationId: getServiceStatus
+      responses:
+        "200":
+          description: Server status
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServerStatus" }
+  /services/{id}/credentials:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [services]
+      summary: Get service credentials
+      operationId: getServiceCredentials
+      responses:
+        "200":
+          description: Credentials
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          username: { type: string }
+                          password: { type: string }
+  /services/{id}/reset-password:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [services]
+      summary: Reset the service password
+      operationId: resetServicePassword
+      responses:
+        "200":
+          description: New password
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          password: { type: string }
+  /services/{id}/console:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [services]
+      summary: Get the noVNC console URL
+      operationId: getServiceConsole
+      responses:
+        "200":
+          description: Console URL
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          url: { type: string }
+  /services/{id}/console/ticket:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [services]
+      summary: Mint a console WebSocket ticket
+      operationId: createConsoleTicket
+      responses:
+        "200":
+          description: Console ticket
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          ticket: { type: string }
+                          password: { type: string }
+                          ws_path: { type: string }
+  /console/ws:
+    get:
+      tags: [services]
+      summary: Console WebSocket (ticket auth)
+      operationId: consoleWebSocket
+      description: >
+        WebSocket upgrade endpoint authenticated by the `ticket` query param
+        (outside the bearer auth group). Returns HTTP 101 on upgrade.
+      security: []
+      parameters:
+        - name: ticket
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "101": { description: Switching Protocols (WebSocket) }
+
+  # ── Network ─────────────────────────────────────────────────────────
+  /services/{id}/ips/:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [network]
+      summary: List service IPs
+      operationId: listServiceIps
+      responses:
+        "200":
+          description: IPs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/IP" }
+  /services/{id}/firewall/:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [network]
+      summary: List firewall rules
+      operationId: listFirewallRules
+      responses:
+        "200":
+          description: Rules
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/FirewallRule" }
+    post:
+      tags: [network]
+      summary: Create a firewall rule
+      operationId: createFirewallRule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FirewallRule" }
+      responses:
+        "201":
+          description: Created rule
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/FirewallRule" }
+  /services/{id}/firewall/export:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [network]
+      summary: Export the firewall ruleset
+      operationId: exportFirewall
+      responses:
+        "200":
+          description: JSON document (attachment)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+  /services/{id}/firewall/import:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [network]
+      summary: Replace the ruleset from a JSON document
+      operationId: importFirewall
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Imported rules
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/FirewallRule" }
+  /services/{id}/firewall/{ruleID}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+      - name: ruleID
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [network]
+      summary: Delete a firewall rule
+      operationId: deleteFirewallRule
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: deleted }
+  /services/{id}/private-networks/:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [network]
+      summary: List private networks a service is attached to
+      operationId: listServicePrivateNetworks
+      responses:
+        "200":
+          description: Private networks
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/PrivateNetwork" }
+    post:
+      tags: [network]
+      summary: Attach the service to a private network
+      operationId: attachPrivateNetwork
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [network_id]
+              properties:
+                network_id: { type: string }
+      responses:
+        "200":
+          description: Attached
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: attached }
+  /services/{id}/private-networks/{networkID}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+      - name: networkID
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [network]
+      summary: Detach the service from a private network
+      operationId: detachPrivateNetwork
+      responses:
+        "204": { description: Detached }
+  /ips/{id}/rdns:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    put:
+      tags: [network]
+      summary: Set rDNS/PTR for an IP
+      operationId: setIpRdns
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rdns]
+              properties:
+                rdns: { type: string }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id: { type: string }
+                          rdns: { type: string }
+  /private-networks/:
+    get:
+      tags: [network]
+      summary: List the account's private networks
+      operationId: listPrivateNetworks
+      responses:
+        "200":
+          description: Private networks
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/PrivateNetwork" }
+    post:
+      tags: [network]
+      summary: Create a private network
+      operationId: createPrivateNetwork
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, cidr, location_id]
+              properties:
+                name: { type: string }
+                cidr: { type: string }
+                location_id: { type: string }
+                vlan: { type: integer }
+      responses:
+        "201":
+          description: Created private network
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PrivateNetwork" }
+  /private-networks/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    delete:
+      tags: [network]
+      summary: Delete a private network
+      operationId: deletePrivateNetwork
+      responses:
+        "204": { description: Deleted }
+
+  # ── Snapshots ─────────────────────────────────────────────────────────
+  /services/{id}/snapshots/:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [snapshots]
+      summary: List snapshots
+      operationId: listSnapshots
+      responses:
+        "200":
+          description: Snapshots
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Snapshot" }
+    post:
+      tags: [snapshots]
+      summary: Create a snapshot
+      operationId: createSnapshot
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "201":
+          description: Created snapshot
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Snapshot" }
+  /snapshots/{id}/restore:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [snapshots]
+      summary: Restore a snapshot
+      operationId: restoreSnapshot
+      responses:
+        "202":
+          description: Restoring
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: restoring }
+  /snapshots/{id}/:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    delete:
+      tags: [snapshots]
+      summary: Delete a snapshot
+      operationId: deleteSnapshot
+      responses:
+        "204": { description: Deleted }
+
+  # ── Backups ─────────────────────────────────────────────────────────
+  /services/{id}/backups/:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [backups]
+      summary: List backups
+      operationId: listBackups
+      responses:
+        "200":
+          description: Backups
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Backup" }
+    post:
+      tags: [backups]
+      summary: Create a backup schedule
+      operationId: createBackup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [schedule, retention]
+              properties:
+                schedule: { type: string }
+                retention: { type: integer }
+      responses:
+        "201":
+          description: Created backup
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Backup" }
+
+  # ── Monitoring ────────────────────────────────────────────────────────
+  /services/{id}/metrics/:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [monitoring]
+      summary: Historical metrics
+      operationId: listMetrics
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Metric series
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MetricPoint" }
+  /services/{id}/metrics/stream:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [monitoring]
+      summary: Live metrics stream (SSE)
+      operationId: streamMetrics
+      responses:
+        "200":
+          description: Server-Sent Events stream of MetricPoint
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /alerts/:
+    get:
+      tags: [monitoring]
+      summary: List cloud alerts
+      operationId: listAlerts
+      responses:
+        "200":
+          description: Alerts
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/CloudAlert" }
+    post:
+      tags: [monitoring]
+      summary: Create a cloud alert
+      operationId: createAlert
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CloudAlert" }
+      responses:
+        "201":
+          description: Created alert
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/CloudAlert" }
+  /alerts/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    put:
+      tags: [monitoring]
+      summary: Update a cloud alert
+      operationId: updateAlert
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CloudAlert" }
+      responses:
+        "200":
+          description: Updated alert
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/CloudAlert" }
+    delete:
+      tags: [monitoring]
+      summary: Delete a cloud alert
+      operationId: deleteAlert
+      responses:
+        "204": { description: Deleted }
+
+  # ── DDoS ─────────────────────────────────────────────────────────────
+  /ddos/profiles:
+    get:
+      tags: [ddos]
+      summary: List DDoS profiles
+      operationId: listDdosProfiles
+      responses:
+        "200":
+          description: Profiles
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/DdosProfile" }
+  /services/{id}/ddos/profile:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [ddos]
+      summary: Get applied DDoS profiles for a service
+      operationId: getServiceDdosProfile
+      responses:
+        "200":
+          description: Applied profiles
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          profiles:
+                            type: array
+                            items: { type: string }
+    put:
+      tags: [ddos]
+      summary: Apply a DDoS profile
+      operationId: applyServiceDdosProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile]
+              properties:
+                profile: { type: string }
+      responses:
+        "200":
+          description: Applied
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: applied }
+    delete:
+      tags: [ddos]
+      summary: Remove a DDoS profile
+      operationId: removeServiceDdosProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile]
+              properties:
+                profile: { type: string }
+      responses:
+        "204": { description: Removed }
+  /services/{id}/ddos/events:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [ddos]
+      summary: List DDoS mitigation events
+      operationId: listServiceDdosEvents
+      responses:
+        "200":
+          description: Events
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/DdosEvent" }
+
+  # ── SSH keys ─────────────────────────────────────────────────────────
+  /ssh-keys/:
+    get:
+      tags: [ssh-keys]
+      summary: List SSH keys
+      operationId: listSshKeys
+      responses:
+        "200":
+          description: SSH keys
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Key" }
+    post:
+      tags: [ssh-keys]
+      summary: Add an SSH key
+      operationId: createSshKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, public_key]
+              properties:
+                name: { type: string }
+                public_key: { type: string }
+      responses:
+        "201":
+          description: Created key
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Key" }
+  /ssh-keys/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    delete:
+      tags: [ssh-keys]
+      summary: Delete an SSH key
+      operationId: deleteSshKey
+      responses:
+        "204": { description: Deleted }
+  /services/{id}/ssh-keys/{keyID}/:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+      - name: keyID
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      tags: [ssh-keys]
+      summary: Attach an SSH key to a service
+      operationId: attachServiceSshKey
+      responses:
+        "200":
+          description: Attached
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: attached }
+    delete:
+      tags: [ssh-keys]
+      summary: Detach an SSH key from a service
+      operationId: detachServiceSshKey
+      responses:
+        "204": { description: Detached }
+
+  # ── App marketplace ─────────────────────────────────────────────────
+  /apps:
+    get:
+      tags: [apps]
+      summary: List marketplace apps
+      operationId: listApps
+      description: Read-only catalog of 1-click installable apps. Requires the `apps:read` scope.
+      parameters:
+        - name: target
+          in: query
+          required: false
+          schema: { type: string, example: vps }
+          description: Filter apps by deploy target (e.g. `vps`).
+      responses:
+        "200":
+          description: Apps
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/App" }
+  /apps/{slug}:
+    parameters:
+      - name: slug
+        in: path
+        required: true
+        schema: { type: string }
+        description: App slug.
+    get:
+      tags: [apps]
+      summary: Get a marketplace app
+      operationId: getApp
+      description: Requires the `apps:read` scope.
+      responses:
+        "200":
+          description: App
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/App" }
+  /services/{id}/apps:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [apps]
+      summary: List app installs on a service
+      operationId: listServiceApps
+      description: Requires the `apps:read` scope.
+      responses:
+        "200":
+          description: App installs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/AppInstall" }
+    post:
+      tags: [apps]
+      summary: Install an app on a service
+      operationId: installServiceApp
+      description: Requires the `apps:write` scope.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug]
+              properties:
+                slug: { type: string }
+                params:
+                  type: object
+                  additionalProperties: { type: string }
+      responses:
+        "202":
+          description: Install accepted
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AppInstall" }
+  /services/{id}/apps/{installID}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+      - name: installID
+        in: path
+        required: true
+        schema: { type: string }
+        description: App install ID.
+    get:
+      tags: [apps]
+      summary: Get an app install
+      operationId: getServiceApp
+      description: Requires the `apps:read` scope.
+      responses:
+        "200":
+          description: App install
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AppInstall" }
+    delete:
+      tags: [apps]
+      summary: Remove an app install
+      operationId: removeServiceApp
+      description: Requires the `apps:write` scope.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          description: Removal accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: removing }
+  /services/{id}/apps/{installID}/credentials:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+      - name: installID
+        in: path
+        required: true
+        schema: { type: string }
+        description: App install ID.
+    get:
+      tags: [apps]
+      summary: Get app install credentials
+      operationId: getServiceAppCredentials
+      description: Returns generated secrets for the install. Requires the `apps:read` scope.
+      responses:
+        "200":
+          description: Install credentials
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secrets:
+                    type: object
+                    additionalProperties: { type: string }
+  /services/{id}/apps/{installID}/reinstall:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+      - name: installID
+        in: path
+        required: true
+        schema: { type: string }
+        description: App install ID.
+    post:
+      tags: [apps]
+      summary: Reinstall an app
+      operationId: reinstallServiceApp
+      description: Requires the `apps:write` scope.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          description: Reinstall accepted
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AppInstall" }
+
+  # ── Cron Jobs ───────────────────────────────────────────────────────
+  /cron-jobs:
+    get:
+      tags: [cron-jobs]
+      summary: Cron jobs overview
+      operationId: getCronOverview
+      description: >
+        Returns the account's cron tier, current plan, available plans, allowed
+        intervals and all jobs. Requires the `cron:read` scope.
+      responses:
+        "200":
+          description: Cron overview
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/CronOverview" }
+    post:
+      tags: [cron-jobs]
+      summary: Create a cron job
+      operationId: createCronJob
+      description: Requires the `cron:write` scope.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, url, interval_sec]
+              properties:
+                name: { type: string }
+                url: { type: string, format: uri }
+                method: { type: string, example: GET }
+                headers:
+                  type: object
+                  additionalProperties: { type: string }
+                body: { type: string }
+                interval_sec: { type: integer }
+      responses:
+        "201":
+          description: Created cron job
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/CronJob" }
+  /cron-jobs/upgrade:
+    post:
+      tags: [cron-jobs]
+      summary: Upgrade the cron tier
+      operationId: upgradeCronTier
+      description: Requires the `cron:write` scope.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tier]
+              properties:
+                tier: { type: string }
+                coupon: { type: string }
+      responses:
+        "200":
+          description: Upgraded tier
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          tier: { type: string }
+  /cron-jobs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [cron-jobs]
+      summary: Get a cron job
+      operationId: getCronJob
+      description: Requires the `cron:read` scope.
+      responses:
+        "200":
+          description: Cron job
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/CronJob" }
+    patch:
+      tags: [cron-jobs]
+      summary: Update a cron job
+      operationId: updateCronJob
+      description: Partial update. Requires the `cron:write` scope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                url: { type: string, format: uri }
+                method: { type: string }
+                headers:
+                  type: object
+                  additionalProperties: { type: string }
+                body: { type: string }
+                interval_sec: { type: integer }
+                enabled: { type: boolean }
+      responses:
+        "200":
+          description: Updated cron job
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/CronJob" }
+    delete:
+      tags: [cron-jobs]
+      summary: Delete a cron job
+      operationId: deleteCronJob
+      description: Requires the `cron:write` scope.
+      responses:
+        "204": { description: Deleted }
+  /cron-jobs/{id}/pause:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [cron-jobs]
+      summary: Pause a cron job
+      operationId: pauseCronJob
+      description: Requires the `cron:write` scope.
+      responses:
+        "200":
+          description: Paused cron job
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/CronJob" }
+  /cron-jobs/{id}/resume:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [cron-jobs]
+      summary: Resume a cron job
+      operationId: resumeCronJob
+      description: Requires the `cron:write` scope.
+      responses:
+        "200":
+          description: Resumed cron job
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/CronJob" }
+  /cron-jobs/{id}/run:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [cron-jobs]
+      summary: Trigger a cron job now
+      operationId: runCronJob
+      description: Requires the `cron:write` scope.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          description: Run accepted
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/CronJob" }
+  /cron-jobs/{id}/runs:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [cron-jobs]
+      summary: List cron job runs
+      operationId: listCronRuns
+      description: Requires the `cron:read` scope.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Cron runs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/CronRun" }
+
+  # ── Webhooks ────────────────────────────────────────────────────────
+  /webhooks:
+    get:
+      tags: [webhooks]
+      summary: List webhook endpoints
+      operationId: listWebhooks
+      responses:
+        "200":
+          description: Webhook endpoints
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/WebhookEndpoint" }
+    post:
+      tags: [webhooks]
+      summary: Register a webhook endpoint
+      operationId: createWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url: { type: string, format: uri }
+                events:
+                  type: array
+                  items: { type: string }
+      responses:
+        "201":
+          description: Created endpoint
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WebhookEndpoint" }
+  /webhooks/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    delete:
+      tags: [webhooks]
+      summary: Delete a webhook endpoint
+      operationId: deleteWebhook
+      responses:
+        "204": { description: Deleted }
+  /webhooks/{id}/deliveries:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [webhooks]
+      summary: List webhook deliveries
+      operationId: listWebhookDeliveries
+      responses:
+        "200":
+          description: Deliveries
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/WebhookDelivery" }
+  /webhooks/{id}/test:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [webhooks]
+      summary: Send a test event
+      operationId: testWebhook
+      responses:
+        "202":
+          description: Sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: sent }
+
+  # ── Affiliate ───────────────────────────────────────────────────────
+  /affiliate:
+    get:
+      tags: [affiliate]
+      summary: Affiliate dashboard
+      operationId: getAffiliate
+      responses:
+        "200":
+          description: Affiliate
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Affiliate" }
+  /affiliate/enroll:
+    post:
+      tags: [affiliate]
+      summary: Enroll in the affiliate program
+      operationId: enrollAffiliate
+      responses:
+        "201":
+          description: Enrolled
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Affiliate" }
+  /affiliate/clicks:
+    post:
+      tags: [affiliate]
+      summary: Record an affiliate click
+      operationId: recordAffiliateClick
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /affiliate/signups:
+    post:
+      tags: [affiliate]
+      summary: Record an affiliate signup
+      operationId: recordAffiliateSignup
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /affiliate/conversions:
+    post:
+      tags: [affiliate]
+      summary: Record an affiliate conversion
+      operationId: recordAffiliateConversion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, amount_cents, currency]
+              properties:
+                code: { type: string }
+                amount_cents: { type: integer, format: int64 }
+                currency: { type: string, example: EUR }
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /affiliate/payouts:
+    get:
+      tags: [affiliate]
+      summary: List affiliate payouts
+      operationId: listAffiliatePayouts
+      responses:
+        "200":
+          description: Payouts
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/AffiliatePayout" }
+    post:
+      tags: [affiliate]
+      summary: Request an affiliate payout
+      operationId: createAffiliatePayout
+      responses:
+        "201":
+          description: Created payout
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AffiliatePayout" }
+
+  # ── Support ─────────────────────────────────────────────────────────
+  /support/tickets:
+    get:
+      tags: [support]
+      summary: List support tickets
+      operationId: listTickets
+      responses:
+        "200":
+          description: Tickets
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Ticket" }
+    post:
+      tags: [support]
+      summary: Open a support ticket
+      operationId: createTicket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject, department, priority]
+              properties:
+                subject: { type: string }
+                department: { type: string }
+                priority: { type: string }
+      responses:
+        "201":
+          description: Created ticket
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Ticket" }
+  /support/tickets/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [support]
+      summary: Get a ticket with its messages
+      operationId: getTicket
+      responses:
+        "200":
+          description: Ticket and messages
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          ticket: { $ref: "#/components/schemas/Ticket" }
+                          messages:
+                            type: array
+                            items: { $ref: "#/components/schemas/TicketMessage" }
+  /support/tickets/{id}/messages:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [support]
+      summary: Post a message to a ticket
+      operationId: createTicketMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string }
+      responses:
+        "201":
+          description: Created message
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/TicketMessage" }
+  /support/tickets/{id}/close:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [support]
+      summary: Close a ticket
+      operationId: closeTicket
+      responses:
+        "200": { $ref: "#/components/responses/TicketResponse" }
+  /support/kb:
+    get:
+      tags: [support]
+      summary: Search the knowledge base
+      operationId: searchKnowledgeBase
+      parameters:
+        - $ref: "#/components/parameters/Q"
+        - $ref: "#/components/parameters/Locale"
+      responses:
+        "200":
+          description: Articles
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/KBArticle" }
+  /support/credentials:
+    post:
+      tags: [support]
+      summary: Share a credential with support (encrypted, TTL'd)
+      operationId: createSharedCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label, secret, ttl_minutes]
+              properties:
+                label: { type: string }
+                secret: { type: string }
+                ttl_minutes: { type: integer }
+      responses:
+        "201":
+          description: Shared credential
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SharedCredential" }
+
+  # ── Admin: auth ─────────────────────────────────────────────────────
+  /admin/auth/login:
+    post:
+      tags: [admin-auth]
+      summary: Staff login
+      operationId: adminLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, totp_code]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                totp_code: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/SessionResponse" }
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+  /admin/auth/refresh:
+    post:
+      tags: [admin-auth]
+      summary: Rotate the staff refresh token
+      operationId: adminRefresh
+      security:
+        - cookieAuth: []
+        - {}
+      responses:
+        "200": { $ref: "#/components/responses/SessionResponse" }
+  /admin/auth/logout:
+    post:
+      tags: [admin-auth]
+      summary: Staff logout
+      operationId: adminLogout
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                session_id: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /admin/auth/totp/enroll:
+    post:
+      tags: [admin-auth]
+      summary: Begin staff TOTP enrollment
+      operationId: adminEnrollTotp
+      responses:
+        "200":
+          description: TOTP secret and provisioning URI
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret: { type: string }
+                  provisioning_uri: { type: string }
+  /admin/auth/totp/confirm:
+    post:
+      tags: [admin-auth]
+      summary: Confirm staff TOTP enrollment
+      operationId: adminConfirmTotp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        "200":
+          description: Confirmed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: confirmed }
+  /admin/auth/impersonate/{accountID}:
+    parameters:
+      - name: accountID
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [admin-auth]
+      summary: Impersonate an account
+      operationId: adminImpersonate
+      responses:
+        "200":
+          description: Impersonation access token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+
+  # ── Admin: staff ────────────────────────────────────────────────────
+  /admin/staff:
+    get:
+      tags: [admin-staff]
+      summary: List staff members
+      operationId: listStaff
+      responses:
+        "200":
+          description: Staff members
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/StaffMember" }
+    post:
+      tags: [admin-staff]
+      summary: Create a staff member
+      operationId: createStaff
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, name, role]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                name: { type: string }
+                role: { type: string }
+      responses:
+        "201":
+          description: Created staff member
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/StaffMember" }
+
+  # ── Admin: core ─────────────────────────────────────────────────────
+  /admin/products:
+    post:
+      tags: [admin-core]
+      summary: Create a product (products:write)
+      operationId: adminCreateProduct
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProductInput" }
+      responses:
+        "200": { $ref: "#/components/responses/CreatedId" }
+  /admin/products/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    delete:
+      tags: [admin-core]
+      summary: Delete a product (products:write)
+      operationId: adminDeleteProduct
+      responses:
+        "204": { description: Deleted }
+  /admin/plans:
+    post:
+      tags: [admin-core]
+      summary: Create a plan (products:write)
+      operationId: adminCreatePlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanInput" }
+      responses:
+        "200": { $ref: "#/components/responses/CreatedId" }
+  /admin/plans/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    delete:
+      tags: [admin-core]
+      summary: Delete a plan (products:write)
+      operationId: adminDeletePlan
+      responses:
+        "204": { description: Deleted }
+  /admin/accounts:
+    get:
+      tags: [admin-core]
+      summary: Search accounts (users:read)
+      operationId: adminListAccounts
+      parameters:
+        - $ref: "#/components/parameters/Q"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Accounts
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/AccountRow" }
+  /admin/accounts/{id}/ban:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [admin-core]
+      summary: Ban an account (users:ban)
+      operationId: adminBanAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        "200":
+          description: Banned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: banned }
+  /admin/accounts/{id}/unban:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [admin-core]
+      summary: Unban an account (users:ban)
+      operationId: adminUnbanAccount
+      responses:
+        "200":
+          description: Active
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: active }
+  /admin/accounts/{id}/discount:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [admin-core]
+      summary: Set an account global discount (users:edit)
+      operationId: adminSetAccountDiscount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pct]
+              properties:
+                pct: { type: number }
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /admin/accounts/{id}/limit:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [admin-core]
+      summary: Set an account service limit (users:edit)
+      operationId: adminSetAccountLimit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [limit]
+              properties:
+                limit: { type: integer }
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /admin/accounts/{id}/balance:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [admin-core]
+      summary: Adjust an account balance (billing:adjust)
+      operationId: adminAdjustAccountBalance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount_cents, reason]
+              properties:
+                amount_cents: { type: integer, format: int64 }
+                reason: { type: string }
+      responses:
+        "200":
+          description: Adjusted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: adjusted }
+  /admin/accounts/{id}/affiliate:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [admin-core]
+      summary: Set an account affiliate commission (users:edit)
+      operationId: adminSetAccountAffiliate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pct]
+              properties:
+                pct: { type: integer }
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /admin/promotions:
+    post:
+      tags: [admin-core]
+      summary: Create a promotion (promotions:write)
+      operationId: adminCreatePromotion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PromotionInput" }
+      responses:
+        "200": { $ref: "#/components/responses/CreatedId" }
+  /admin/gift-cards:
+    post:
+      tags: [admin-core]
+      summary: Create a gift card (billing:adjust)
+      operationId: adminCreateGiftCard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount_cents, currency]
+              properties:
+                amount_cents: { type: integer, format: int64 }
+                currency: { type: string, example: EUR }
+      responses:
+        "201":
+          description: Created gift card (plaintext code shown once)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          code: { type: string }
+  /admin/services:
+    get:
+      tags: [admin-core]
+      summary: Search services across accounts (users:read)
+      operationId: adminListServices
+      parameters:
+        - $ref: "#/components/parameters/Q"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Services
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/ServiceRow" }
+  /admin/services/{id}/transfer:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [admin-core]
+      summary: Transfer a service to another account (services:write)
+      operationId: adminTransferService
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account_id]
+              properties:
+                account_id: { type: string }
+      responses:
+        "200":
+          description: Transferred
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: transferred }
+  /admin/logs:
+    get:
+      tags: [admin-core]
+      summary: List staff audit logs (logs:read)
+      operationId: adminListLogs
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Staff logs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/StaffLog" }
+
+  # ── Admin: support queue ────────────────────────────────────────────
+  /admin/tickets:
+    get:
+      tags: [admin-support]
+      summary: List support queue tickets (tickets:write)
+      operationId: adminListTickets
+      parameters:
+        - $ref: "#/components/parameters/StatusQuery"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Tickets
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Ticket" }
+  /admin/tickets/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [admin-support]
+      summary: Get a ticket with its messages (tickets:write)
+      operationId: adminGetTicket
+      responses:
+        "200":
+          description: Ticket and messages
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          ticket: { $ref: "#/components/schemas/Ticket" }
+                          messages:
+                            type: array
+                            items: { $ref: "#/components/schemas/TicketMessage" }
+    patch:
+      tags: [admin-support]
+      summary: Update ticket fields (tickets:write)
+      operationId: adminUpdateTicket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                subject: { type: string }
+                priority: { type: string }
+                department: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/TicketResponse" }
+  /admin/tickets/{id}/reply:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [admin-support]
+      summary: Reply to a ticket (tickets:write)
+      operationId: adminReplyTicket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string }
+      responses:
+        "201":
+          description: Created reply
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/TicketMessage" }
+  /admin/tickets/{id}/note:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [admin-support]
+      summary: Add an internal note (tickets:write)
+      operationId: adminNoteTicket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string }
+      responses:
+        "201":
+          description: Created internal note
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/TicketMessage" }
+  /admin/tickets/{id}/assign:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [admin-support]
+      summary: Assign a ticket (tickets:write)
+      operationId: adminAssignTicket
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                staff_id: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/TicketResponse" }
+  /admin/tickets/{id}/assignees:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [admin-support]
+      summary: Add a ticket assignee (tickets:write)
+      operationId: adminAddTicketAssignee
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [staff_id]
+              properties:
+                staff_id: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/TicketResponse" }
+  /admin/tickets/{id}/assignees/{staffID}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+      - name: staffID
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [admin-support]
+      summary: Remove a ticket assignee (tickets:write)
+      operationId: adminRemoveTicketAssignee
+      responses:
+        "200": { $ref: "#/components/responses/TicketResponse" }
+  /admin/tickets/{id}/close:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [admin-support]
+      summary: Close a ticket (tickets:write)
+      operationId: adminCloseTicket
+      responses:
+        "200": { $ref: "#/components/responses/TicketResponse" }
+  /admin/credentials/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [admin-support]
+      summary: Reveal a shared credential secret (policy:override)
+      operationId: adminRevealCredential
+      responses:
+        "200":
+          description: Revealed secret
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          secret: { type: string }
+
+  # ── Admin: fleet ────────────────────────────────────────────────────
+  /admin/clusters:
+    get:
+      tags: [admin-fleet]
+      summary: List clusters (products:write)
+      operationId: adminListClusters
+      responses:
+        "200":
+          description: Clusters
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Cluster" }
+    post:
+      tags: [admin-fleet]
+      summary: Create a cluster (products:write)
+      operationId: adminCreateCluster
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClusterInput" }
+      responses:
+        "201":
+          description: Created cluster
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Cluster" }
+  /admin/clusters/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    patch:
+      tags: [admin-fleet]
+      summary: Update a cluster (products:write)
+      operationId: adminUpdateCluster
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClusterInput" }
+      responses:
+        "200":
+          description: Updated cluster
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Cluster" }
+    delete:
+      tags: [admin-fleet]
+      summary: Delete a cluster (products:write)
+      operationId: adminDeleteCluster
+      responses:
+        "204": { description: Deleted }
+  /admin/clusters/{id}/test:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [admin-fleet]
+      summary: Test cluster connectivity (products:write)
+      operationId: adminTestCluster
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+  /admin/clusters/{id}/discover:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [admin-fleet]
+      summary: Discover nodes in a cluster (products:write)
+      operationId: adminDiscoverNodes
+      responses:
+        "200":
+          description: Discovered nodes
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/DiscoveredNode" }
+  /admin/clusters/{id}/guests:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [admin-fleet]
+      summary: List guests in a cluster (products:write)
+      operationId: adminListGuests
+      responses:
+        "200":
+          description: Guests
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Guest" }
+  /admin/clusters/{id}/nodes:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    get:
+      tags: [admin-fleet]
+      summary: List cluster nodes (products:write)
+      operationId: adminListNodes
+      responses:
+        "200":
+          description: Nodes
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Node" }
+    post:
+      tags: [admin-fleet]
+      summary: Add a cluster node (products:write)
+      operationId: adminCreateNode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [node_name, node_type, subnet, gateway]
+              properties:
+                node_name: { type: string }
+                node_type: { type: string }
+                subnet: { type: string }
+                gateway: { type: string }
+                enabled: { type: boolean }
+      responses:
+        "200":
+          description: Created node
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Node" }
+  /admin/clusters/{id}/sync-ips:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    post:
+      tags: [admin-fleet]
+      summary: Sync IPs for a node (products:write)
+      operationId: adminSyncIps
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [node_name]
+              properties:
+                node_name: { type: string }
+      responses:
+        "200":
+          description: Synced
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          added: { type: integer }
+  /admin/nodes/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathID"
+    delete:
+      tags: [admin-fleet]
+      summary: Delete a node (products:write)
+      operationId: adminDeleteNode
+      responses:
+        "204": { description: Deleted }
+  /admin/node-types:
+    get:
+      tags: [admin-fleet]
+      summary: List available node types (products:write)
+      operationId: adminListNodeTypes
+      responses:
+        "200":
+          description: Node types
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { type: string }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: ph_live or access JWT
+      description: >
+        API token (`Authorization: Bearer ph_live_…`, account-scoped, limited to
+        granted scopes) or an access JWT. API tokens can never manage tokens.
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: ph_access
+      description: >
+        Browser/staff session cookie (HttpOnly access JWT alongside a rotating
+        refresh cookie). Staff use the same cookie with a staff JWT.
+
+  parameters:
+    PathID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: Resource ID (`<prefix>_<uuidv7hex>`).
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema: { type: string }
+      description: Opaque pagination cursor (the last resource ID from the previous page).
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema: { type: integer }
+      description: Maximum number of items to return.
+    StatusQuery:
+      name: status
+      in: query
+      required: false
+      schema: { type: string }
+      description: Filter by status.
+    TypeQuery:
+      name: type
+      in: query
+      required: false
+      schema: { type: string }
+      description: Filter by type.
+    GroupId:
+      name: group_id
+      in: query
+      required: false
+      schema: { type: string }
+      description: Filter services by service group.
+    ProductId:
+      name: product_id
+      in: query
+      required: false
+      schema: { type: string }
+      description: Filter plans by product.
+    From:
+      name: from
+      in: query
+      required: false
+      schema: { type: string, format: date-time }
+      description: Start of the time range (RFC 3339).
+    To:
+      name: to
+      in: query
+      required: false
+      schema: { type: string, format: date-time }
+      description: End of the time range (RFC 3339).
+    Q:
+      name: q
+      in: query
+      required: false
+      schema: { type: string }
+      description: Free-text search query.
+    Locale:
+      name: locale
+      in: query
+      required: false
+      schema: { type: string }
+      description: BCP-47 locale for localized content.
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string }
+      description: >
+        Makes money/resource-creating writes safe to retry. Replays return the
+        stored response with `Idempotency-Replayed: true`.
+
+  headers:
+    IdempotencyReplayed:
+      description: "`true` when this response is a replay of a prior idempotent request."
+      schema: { type: boolean }
+
+  responses:
+    ErrorResponse:
+      description: Error envelope
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    StatusOK:
+      description: Status acknowledgement
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status: { type: string, example: ok }
+    Accepted:
+      description: Accepted
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status: { type: string, example: accepted }
+    CreatedId:
+      description: Created resource ID
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/DataEnvelope"
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id: { type: string }
+    SessionResponse:
+      description: >
+        Authenticated session. The access + rotating refresh tokens are set as
+        HttpOnly cookies; the body echoes the access token and session id for
+        non-browser clients.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/DataEnvelope"
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      access_token: { type: string }
+                      session_id: { type: string }
+    InstanceResponse:
+      description: A service instance
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/DataEnvelope"
+              - type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Instance" }
+    TicketResponse:
+      description: A ticket
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/DataEnvelope"
+              - type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Ticket" }
+    CidrList:
+      description: A list of CIDR strings
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/DataEnvelope"
+              - type: object
+                properties:
+                  data:
+                    type: array
+                    items: { type: string }
+
+  schemas:
+    # ── Envelopes & primitives ───────────────────────────────────────
+    DataEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data: {}
+      description: Standard success envelope wrapping a single object.
+    Meta:
+      type: object
+      properties:
+        cursor: { type: string }
+        has_more: { type: boolean }
+        total: { type: integer }
+    ListEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {}
+        meta: { $ref: "#/components/schemas/Meta" }
+      description: Standard list envelope with pagination meta.
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: VALIDATION_ERROR
+              enum:
+                - VALIDATION_ERROR
+                - UNAUTHORIZED
+                - FORBIDDEN
+                - NOT_FOUND
+                - CONFLICT
+                - IDEMPOTENCY_CONFLICT
+                - INSUFFICIENT_BALANCE
+                - CREDIT_LIMIT_EXCEEDED
+                - NO_CAPACITY
+                - RATE_LIMITED
+                - NOT_IMPLEMENTED
+                - PAYMENT_FAILED
+                - WEBHOOK_SIGNATURE_INVALID
+                - INTERNAL
+            message: { type: string }
+            docs:
+              type: string
+              example: https://docs.palmahost.sh/errors/VALIDATION_ERROR
+    Money:
+      type: object
+      required: [cents, currency]
+      properties:
+        cents: { type: integer, format: int64 }
+        currency: { type: string, example: EUR }
+
+    # ── Catalog ───────────────────────────────────────────────────────
+    Product:
+      type: object
+      required: [id, kind, category, name_i18n, description_i18n, active, sort_order]
+      properties:
+        id: { type: string }
+        kind: { type: string, example: vps }
+        category: { type: string }
+        name_i18n:
+          type: object
+          additionalProperties: { type: string }
+        description_i18n:
+          type: object
+          additionalProperties: { type: string }
+        active: { type: boolean }
+        sort_order: { type: integer }
+    Plan:
+      type: object
+      required: [id, product_id, code, specs, base_price_cents_month, popular, available_locations, active]
+      properties:
+        id: { type: string }
+        product_id: { type: string }
+        code: { type: string, example: es.medium }
+        specs:
+          type: object
+          additionalProperties: true
+        base_price_cents_month: { type: integer, format: int64 }
+        hourly_price_cents:
+          type: [integer, "null"]
+          format: int64
+        popular: { type: boolean }
+        available_locations:
+          type: array
+          items: { type: string }
+        active: { type: boolean }
+    Location:
+      type: object
+      required: [id, code, name, country, flag, active]
+      properties:
+        id: { type: string }
+        code: { type: string, example: mad }
+        name: { type: string }
+        country: { type: string }
+        flag: { type: string }
+        ip_block_cidr:
+          type: [string, "null"]
+        active: { type: boolean }
+
+    # ── Auth / identity ───────────────────────────────────────────────
+    User:
+      type: object
+      required: [id, account_id, email, name, status, created_at]
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        email: { type: string, format: email }
+        name: { type: string }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+    Session:
+      type: object
+      required: [id, user_id, created_at, last_seen_at]
+      properties:
+        id: { type: string }
+        user_id: { type: string }
+        device: { type: string }
+        ip: { type: string }
+        user_agent: { type: string }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        revoked_at:
+          type: [string, "null"]
+          format: date-time
+    APIToken:
+      type: object
+      required: [id, account_id, name, prefix, scopes, created_at]
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        name: { type: string }
+        prefix: { type: string }
+        scopes:
+          type: array
+          items: { type: string }
+        ip_allowlist:
+          type: array
+          items: { type: string }
+        rate_limit_rpm:
+          type: [integer, "null"]
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        last_used_at:
+          type: [string, "null"]
+          format: date-time
+        revoked_at:
+          type: [string, "null"]
+          format: date-time
+        created_at: { type: string, format: date-time }
+
+    # ── Account ───────────────────────────────────────────────────────
+    AccountProfile:
+      type: object
+      required: [id, primary_user_id, name, email, balance, currency, language, service_limit, status, created_at, updated_at]
+      properties:
+        id: { type: string }
+        primary_user_id: { type: string }
+        name: { type: string }
+        email: { type: string, format: email }
+        company_name: { type: string }
+        tax_id: { type: string }
+        billing_address:
+          type: object
+          additionalProperties: true
+        holded_contact_id:
+          type: [string, "null"]
+        balance: { $ref: "#/components/schemas/Money" }
+        currency: { type: string }
+        language: { type: string }
+        service_limit: { type: integer }
+        status: { type: string }
+        ban_reason:
+          type: [string, "null"]
+        notification_channels:
+          type: array
+          items: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TeamMember:
+      type: object
+      required: [user_id, account_id, email, name, role_in_account, permissions, status, created_at]
+      properties:
+        user_id: { type: string }
+        account_id: { type: string }
+        email: { type: string, format: email }
+        name: { type: string }
+        role_in_account: { type: string }
+        permissions:
+          type: array
+          items: { type: string }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+        last_login_at:
+          type: [string, "null"]
+          format: date-time
+    ServiceGroup:
+      type: object
+      required: [id, name, services_count, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        services_count: { type: integer }
+        created_at: { type: string, format: date-time }
+
+    # ── Billing ───────────────────────────────────────────────────────
+    Transaction:
+      type: object
+      required: [id, type, account_id, amount_cents, balance_after_cents, currency, created_at]
+      properties:
+        id: { type: string }
+        type: { type: string }
+        account_id: { type: string }
+        amount_cents: { type: integer, format: int64 }
+        balance_after_cents: { type: integer, format: int64 }
+        currency: { type: string }
+        service_id:
+          type: [string, "null"]
+        payment_id:
+          type: [string, "null"]
+        reason:
+          type: [string, "null"]
+        staff_id:
+          type: [string, "null"]
+        created_at: { type: string, format: date-time }
+    Invoice:
+      type: object
+      required: [id, number, total_cents, currency, status]
+      properties:
+        id: { type: string }
+        number: { type: string }
+        total_cents: { type: integer, format: int64 }
+        currency: { type: string }
+        status: { type: string }
+        issued_at:
+          type: [string, "null"]
+          format: date-time
+    AutoTopup:
+      type: object
+      required: [enabled, threshold_cents, amount_cents]
+      properties:
+        enabled: { type: boolean }
+        threshold_cents: { type: integer, format: int64 }
+        amount_cents: { type: integer, format: int64 }
+        method_id:
+          type: [string, "null"]
+    GiftCard:
+      type: object
+      required: [id, amount_cents, currency, created_at]
+      properties:
+        id: { type: string }
+        amount_cents: { type: integer, format: int64 }
+        currency: { type: string }
+        redeemed_by:
+          type: [string, "null"]
+        redeemed_at:
+          type: [string, "null"]
+          format: date-time
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        created_by_staff:
+          type: [string, "null"]
+        created_at: { type: string, format: date-time }
+    Promotion:
+      type: object
+      required: [id, type, value, code, usage, max_uses, used_count, created_at]
+      properties:
+        id: { type: string }
+        type: { type: string }
+        value: { type: number }
+        code: { type: string }
+        usage: { type: string }
+        max_uses: { type: integer }
+        used_count: { type: integer }
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        conditions:
+          type: [object, "null"]
+          additionalProperties: true
+        bonus_per_cents:
+          type: [integer, "null"]
+          format: int64
+        created_at: { type: string, format: date-time }
+
+    # ── Services ──────────────────────────────────────────────────────
+    Instance:
+      type: object
+      required: [id, account_id, plan_id, location_id, kind, label, hostname, status, billing_period, unit_price_locked_cents, hypervisor, external_id, external_node, os_image, primary_ip, config, created_at, updated_at]
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        plan_id: { type: string }
+        location_id: { type: string }
+        kind: { type: string }
+        label: { type: string }
+        hostname: { type: string }
+        status: { type: string }
+        billing_period: { type: string }
+        unit_price_locked_cents: { type: integer, format: int64 }
+        price_locked_at:
+          type: [string, "null"]
+          format: date-time
+        next_renewal_at:
+          type: [string, "null"]
+          format: date-time
+        suspended_at:
+          type: [string, "null"]
+          format: date-time
+        grace_until:
+          type: [string, "null"]
+          format: date-time
+        terminated_at:
+          type: [string, "null"]
+          format: date-time
+        last_charged_at:
+          type: [string, "null"]
+          format: date-time
+        hypervisor: { type: string }
+        external_id: { type: string }
+        external_node: { type: string }
+        os_image: { type: string }
+        primary_ip: { type: string }
+        config:
+          type: object
+          additionalProperties: true
+        group_id:
+          type: [string, "null"]
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateServiceInput:
+      type: object
+      required: [plan_id, location_id, label, hostname, os_image, billing_period]
+      properties:
+        plan_id: { type: string }
+        location_id: { type: string }
+        label: { type: string }
+        hostname: { type: string }
+        os_image: { type: string, example: ubuntu-24.04 }
+        billing_period: { type: string, example: monthly }
+        ssh_key_ids:
+          type: array
+          items: { type: string }
+        group_id: { type: string }
+        config:
+          type: object
+          additionalProperties: true
+    ServerStatus:
+      type: object
+      required: [power_state, cpu, maxcpu, mem, maxmem, disk, maxdisk, netin, netout, uptime]
+      properties:
+        power_state: { type: string }
+        cpu: { type: number }
+        maxcpu: { type: integer }
+        mem: { type: integer, format: int64 }
+        maxmem: { type: integer, format: int64 }
+        disk: { type: integer, format: int64 }
+        maxdisk: { type: integer, format: int64 }
+        netin: { type: integer, format: int64 }
+        netout: { type: integer, format: int64 }
+        uptime: { type: integer, format: int64 }
+
+    # ── Network ───────────────────────────────────────────────────────
+    IP:
+      type: object
+      required: [id, service_id, address, version, is_primary, created_at]
+      properties:
+        id: { type: string }
+        service_id: { type: string }
+        address: { type: string }
+        version: { type: integer, example: 4 }
+        is_primary: { type: boolean }
+        rdns: { type: string }
+        block_id:
+          type: [string, "null"]
+        created_at: { type: string, format: date-time }
+    FirewallRule:
+      type: object
+      required: [direction, action, protocol, port_range, source_cidr, priority]
+      properties:
+        id: { type: string }
+        service_id: { type: string }
+        direction: { type: string, enum: [in, out] }
+        action: { type: string, enum: [allow, deny] }
+        protocol: { type: string, enum: [tcp, udp, icmp, any] }
+        port_range: { type: string, example: "30000-30100" }
+        source_cidr: { type: string }
+        priority: { type: integer }
+        comment: { type: string }
+        created_at: { type: string, format: date-time }
+    PrivateNetwork:
+      type: object
+      required: [id, account_id, name, cidr, services, created_at]
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        name: { type: string }
+        cidr: { type: string }
+        vlan:
+          type: [integer, "null"]
+        location_id:
+          type: [string, "null"]
+        services:
+          type: array
+          items: { type: string }
+        created_at: { type: string, format: date-time }
+
+    # ── Snapshots & backups ───────────────────────────────────────────
+    Snapshot:
+      type: object
+      required: [id, service_id, name, external_id, size_bytes, status, created_at]
+      properties:
+        id: { type: string }
+        service_id: { type: string }
+        name: { type: string }
+        external_id: { type: string }
+        size_bytes: { type: integer, format: int64 }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+    Backup:
+      type: object
+      required: [id, service_id, schedule, retention, external_id, status]
+      properties:
+        id: { type: string }
+        service_id: { type: string }
+        schedule: { type: string }
+        retention: { type: integer }
+        external_id: { type: string }
+        status: { type: string }
+        last_run_at:
+          type: [string, "null"]
+          format: date-time
+
+    # ── Monitoring ────────────────────────────────────────────────────
+    MetricPoint:
+      type: object
+      required: [service_id, ts, cpu_pct, ram_bytes, disk_bytes, net_in_bytes, net_out_bytes]
+      properties:
+        service_id: { type: string }
+        ts: { type: string, format: date-time }
+        cpu_pct: { type: number }
+        ram_bytes: { type: integer, format: int64 }
+        disk_bytes: { type: integer, format: int64 }
+        net_in_bytes: { type: integer, format: int64 }
+        net_out_bytes: { type: integer, format: int64 }
+    CloudAlert:
+      type: object
+      required: [name, metric, operator, threshold, duration_seconds, cooldown_seconds, target_type, action, channel]
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        service_id:
+          type: [string, "null"]
+        metric: { type: string }
+        operator: { type: string, enum: [gt, lt, gte, lte, eq] }
+        threshold: { type: number }
+        duration_seconds: { type: integer }
+        cooldown_seconds: { type: integer }
+        target_type: { type: string }
+        action: { type: string }
+        channel: { type: string }
+
+    # ── DDoS ──────────────────────────────────────────────────────────
+    DdosProfile:
+      type: object
+      required: [code, name_i18n]
+      properties:
+        code: { type: string }
+        name_i18n:
+          type: object
+          additionalProperties: { type: string }
+    DdosEvent:
+      type: object
+      required: [vector, volume_mbps, pps, started_at]
+      properties:
+        vector: { type: string }
+        volume_mbps: { type: number }
+        pps: { type: integer, format: int64 }
+        started_at: { type: string, format: date-time }
+        ended_at:
+          type: [string, "null"]
+          format: date-time
+
+    # ── SSH keys ──────────────────────────────────────────────────────
+    Key:
+      type: object
+      required: [id, account_id, name, public_key, fingerprint, created_at]
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        name: { type: string }
+        public_key: { type: string }
+        fingerprint: { type: string }
+        created_at: { type: string, format: date-time }
+
+    # ── App marketplace ───────────────────────────────────────────────
+    AppVariable:
+      type: object
+      required: [key, type]
+      properties:
+        key: { type: string }
+        label:
+          type: object
+          properties:
+            es: { type: string }
+            en: { type: string }
+        help:
+          type: object
+          properties:
+            es: { type: string }
+            en: { type: string }
+        type: { type: string }
+        required: { type: boolean }
+        default: { type: string }
+        generate: { type: boolean }
+        secret: { type: boolean }
+    AppPort:
+      type: object
+      required: [port]
+      properties:
+        port: { type: integer }
+        scheme: { type: string }
+        label: { type: string }
+        primary: { type: boolean }
+    App:
+      type: object
+      required: [slug, name, category, method]
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        tagline:
+          type: object
+          properties:
+            es: { type: string }
+            en: { type: string }
+        description:
+          type: object
+          properties:
+            es: { type: string }
+            en: { type: string }
+        category: { type: string }
+        icon: { type: string }
+        version: { type: string }
+        website: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        targets:
+          type: array
+          items: { type: string, example: vps }
+        method:
+          type: string
+          enum: [docker_compose, script]
+        min_memory_mb: { type: integer }
+        min_disk_gb: { type: integer }
+        variables:
+          type: array
+          items: { $ref: "#/components/schemas/AppVariable" }
+        ports:
+          type: array
+          items: { $ref: "#/components/schemas/AppPort" }
+    AppInstall:
+      type: object
+      required: [id, service_id, app_slug, app_name, status, created_at, updated_at]
+      properties:
+        id: { type: string }
+        service_id: { type: string }
+        app_slug: { type: string }
+        app_name: { type: string }
+        status:
+          type: string
+          enum: [pending, installing, installed, failed, removing, removed]
+        params:
+          type: object
+          additionalProperties: { type: string }
+        access_url: { type: string }
+        output: { type: string }
+        error: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    # ── Cron Jobs ─────────────────────────────────────────────────────
+    CronJob:
+      type: object
+      required: [id, name, url, method, interval_sec, enabled, next_run_at, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        url: { type: string, format: uri }
+        method: { type: string }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+        body: { type: string }
+        interval_sec: { type: integer }
+        enabled: { type: boolean }
+        last_run_at:
+          type: [string, "null"]
+          format: date-time
+        last_status:
+          type: [integer, "null"]
+        last_ok:
+          type: [boolean, "null"]
+        next_run_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CronRun:
+      type: object
+      required: [id, started_at, duration_ms, status_code, ok]
+      properties:
+        id: { type: string }
+        started_at: { type: string, format: date-time }
+        duration_ms: { type: integer }
+        status_code: { type: integer }
+        ok: { type: boolean }
+        error: { type: string }
+    CronPlan:
+      type: object
+      required: [tier, name, price_cents, max_jobs, min_interval_sec, run_history_days]
+      properties:
+        tier: { type: string }
+        name: { type: string }
+        price_cents: { type: integer }
+        max_jobs: { type: integer }
+        min_interval_sec: { type: integer }
+        run_history_days: { type: integer }
+    CronOverview:
+      type: object
+      required: [tier, plan, plans, intervals, jobs, locked_price_cents]
+      properties:
+        tier: { type: string }
+        plan: { $ref: "#/components/schemas/CronPlan" }
+        plans:
+          type: array
+          items: { $ref: "#/components/schemas/CronPlan" }
+        intervals:
+          type: array
+          items: { type: integer }
+        jobs:
+          type: array
+          items: { $ref: "#/components/schemas/CronJob" }
+        locked_price_cents: { type: integer }
+        next_renewal_at:
+          type: [string, "null"]
+          format: date-time
+        pending_tier: { type: string }
+
+    # ── Webhooks ──────────────────────────────────────────────────────
+    WebhookEndpoint:
+      type: object
+      required: [id, account_id, url, events, active]
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        url: { type: string, format: uri }
+        events:
+          type: array
+          items: { type: string }
+        active: { type: boolean }
+    WebhookDelivery:
+      type: object
+      required: [id, webhook_id, event_id, status, attempts]
+      properties:
+        id: { type: string }
+        webhook_id: { type: string }
+        event_id: { type: string }
+        status: { type: string }
+        response_code:
+          type: [integer, "null"]
+        attempts: { type: integer }
+
+    # ── Affiliate ─────────────────────────────────────────────────────
+    Affiliate:
+      type: object
+      required: [account_id, code, pct, clicks, signups, conversions, earnings_cents]
+      properties:
+        account_id: { type: string }
+        code: { type: string }
+        pct: { type: number }
+        clicks: { type: integer }
+        signups: { type: integer }
+        conversions: { type: integer }
+        earnings_cents: { type: integer, format: int64 }
+    AffiliatePayout:
+      type: object
+      required: [id, account_id, amount_cents, status]
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        amount_cents: { type: integer, format: int64 }
+        status: { type: string }
+
+    # ── Support ───────────────────────────────────────────────────────
+    Ticket:
+      type: object
+      required: [id, account_id, subject, department, priority, status, created_at, updated_at]
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        subject: { type: string }
+        department: { type: string }
+        priority: { type: string }
+        status: { type: string }
+        assigned_staff_id:
+          type: [string, "null"]
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        assignee_name: { type: string }
+        requester_name: { type: string }
+        requester_email: { type: string }
+        assignees:
+          type: array
+          items: { type: string }
+    TicketMessage:
+      type: object
+      required: [id, ticket_id, author_type, author_id, body, internal, created_at]
+      properties:
+        id: { type: string }
+        ticket_id: { type: string }
+        author_type: { type: string }
+        author_id: { type: string }
+        author_name: { type: string }
+        body: { type: string }
+        internal: { type: boolean }
+        created_at: { type: string, format: date-time }
+    KBArticle:
+      type: object
+      required: [slug, title, excerpt, title_i18n, body_i18n, category, published]
+      properties:
+        slug: { type: string }
+        title: { type: string }
+        excerpt: { type: string }
+        title_i18n:
+          type: object
+          additionalProperties: { type: string }
+        body_i18n:
+          type: object
+          additionalProperties: { type: string }
+        category: { type: string }
+        published: { type: boolean }
+        updated_at: { type: string, format: date-time }
+    SharedCredential:
+      type: object
+      required: [id, account_id, label, created_by, expires_at, created_at]
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        ticket_id:
+          type: [string, "null"]
+        label: { type: string }
+        created_by: { type: string }
+        expires_at: { type: string, format: date-time }
+        revealed_at:
+          type: [string, "null"]
+          format: date-time
+        created_at: { type: string, format: date-time }
+
+    # ── Admin ─────────────────────────────────────────────────────────
+    StaffMember:
+      type: object
+      required: [id, email, name, role, status, created_at]
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+        name: { type: string }
+        role: { type: string }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+        last_login_at:
+          type: [string, "null"]
+          format: date-time
+    AccountRow:
+      type: object
+      required: [id, company_name, email, balance_cents, status, global_discount_pct]
+      properties:
+        id: { type: string }
+        company_name: { type: string }
+        email: { type: string, format: email }
+        balance_cents: { type: integer, format: int64 }
+        status: { type: string }
+        global_discount_pct: { type: number }
+    ServiceRow:
+      type: object
+      required: [id, account_id, hostname, status, plan_id, location_id]
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        hostname: { type: string }
+        status: { type: string }
+        plan_id: { type: string }
+        location_id: { type: string }
+    StaffLog:
+      type: object
+      required: [id, staff_id, action, target_type, target_id, ip]
+      properties:
+        id: { type: string }
+        staff_id: { type: string }
+        action: { type: string }
+        target_type: { type: string }
+        target_id: { type: string }
+        ip: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+    ProductInput:
+      type: object
+      required: [kind, category, name_i18n]
+      properties:
+        kind: { type: string }
+        category: { type: string }
+        name_i18n:
+          type: object
+          additionalProperties: { type: string }
+        description_i18n:
+          type: object
+          additionalProperties: { type: string }
+        active: { type: boolean }
+        sort_order: { type: integer }
+    PlanInput:
+      type: object
+      required: [product_id, code, specs, base_price_cents_month, node_type]
+      properties:
+        product_id: { type: string }
+        code: { type: string }
+        specs:
+          type: object
+          additionalProperties: true
+        base_price_cents_month: { type: integer, format: int64 }
+        hourly_price_cents:
+          type: [integer, "null"]
+          format: int64
+        node_type: { type: string }
+        popular: { type: boolean }
+        available_locations:
+          type: array
+          items: { type: string }
+        active: { type: boolean }
+    PromotionInput:
+      type: object
+      required: [type, value, code]
+      properties:
+        type: { type: string }
+        value: { type: number }
+        code: { type: string }
+        max_uses: { type: integer }
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        conditions:
+          type: object
+          additionalProperties: true
+        bonus_per_cents:
+          type: [integer, "null"]
+          format: int64
+
+    # ── Fleet ─────────────────────────────────────────────────────────
+    Cluster:
+      type: object
+      required: [id, name, location_id, kind, endpoint, token_id, has_secret, storage, bridge, template_node, templates, enabled, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        location_id: { type: string }
+        kind: { type: string }
+        endpoint: { type: string }
+        token_id: { type: string }
+        has_secret: { type: boolean }
+        storage: { type: string }
+        bridge: { type: string }
+        template_node: { type: string }
+        templates:
+          type: object
+          additionalProperties: true
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ClusterInput:
+      type: object
+      required: [name, location_id, kind, endpoint, token_id, token_secret, storage, bridge, template_node, templates]
+      properties:
+        name: { type: string }
+        location_id: { type: string }
+        kind: { type: string }
+        endpoint: { type: string }
+        token_id: { type: string }
+        token_secret: { type: string }
+        storage: { type: string }
+        bridge: { type: string }
+        template_node: { type: string }
+        templates:
+          type: object
+          additionalProperties: true
+        enabled: { type: boolean }
+    Node:
+      type: object
+      required: [id, cluster_id, node_name, node_type, subnet, gateway, enabled, created_at]
+      properties:
+        id: { type: string }
+        cluster_id: { type: string }
+        node_name: { type: string }
+        node_type: { type: string }
+        subnet: { type: string }
+        gateway: { type: string }
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+    DiscoveredNode:
+      type: object
+      required: [node_name]
+      properties:
+        node_name: { type: string }
+        node_type: { type: string }
+        status: { type: string }
+        cpu: { type: integer }
+        mem: { type: integer, format: int64 }
+        max_mem: { type: integer, format: int64 }
+    Guest:
+      type: object
+      required: [vmid, node]
+      properties:
+        vmid: { type: integer }
+        node: { type: string }
+        name: { type: string }
+        type: { type: string }
+        status: { type: string }
+        cpu: { type: number }
+        maxmem: { type: integer, format: int64 }
+        maxdisk: { type: integer, format: int64 }

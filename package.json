@@ -1,0 +1,31 @@
+{
+  "name": "@palmahost/sdk",
+  "version": "0.1.0",
+  "description": "Official PalmaHost Cloud API SDK for Node.js / TypeScript (generated from the OpenAPI spec).",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "generate": "openapi-typescript ./openapi.yaml -o src/schema.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run generate && npm run build"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.13.0"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.0.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": { "node": ">=18" },
+  "keywords": ["palmahost", "cloud", "vps", "hosting", "api", "sdk"]
+}
