@@ -1,0 +1,26 @@
+# Publishes @palmahost/sdk to npm on every vX.Y.Z tag.
+# Requires the NPM_TOKEN repo secret (npm automation/granular token with publish
+# rights to @palmahost/sdk). The published version comes from package.json, not
+# the tag. Provenance is emitted (id-token: write + public repo).
+name: release
+on:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci
+      - run: npm run build
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
